@@ -9,10 +9,28 @@ from .schemas import RegisterRequest, LoginRequest, FarmCreate, RecordCreate, AI
 from .security import hash_password, verify_password, create_token, decode_token
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="KAIFARMS AI API", version="0.3.0")
+app = FastAPI(title="KAIFARMS AI API", version="0.4.0")
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 bearer = HTTPBearer(auto_error=False)
+
+ASSISTANT_MODES = {
+    "crop": {
+        "label": "Crop Assistant",
+        "focus": "crop production, agronomy, soil, nutrients, weeds, pests, diseases, irrigation, planting, harvesting and post-harvest handling",
+        "intake": "Ask for crop/variety, growth stage or days after planting, field size, location, symptoms, weather/irrigation, recent inputs and farm records when relevant."
+    },
+    "poultry": {
+        "label": "Poultry Assistant",
+        "focus": "broilers, layers, chicks, housing, brooding, feeding, water, vaccination, biosecurity, production performance, egg quality and poultry disease risk",
+        "intake": "Ask for bird type, age, flock size, housing conditions, feed/water, vaccination history, mortality, production rate and symptoms when relevant."
+    },
+    "livestock": {
+        "label": "Livestock Assistant",
+        "focus": "cattle, goats, sheep and other farm livestock, nutrition, housing, breeding, parasites, herd health and animal welfare",
+        "intake": "Ask for species, age/sex, number affected, body condition, symptoms, duration, feeding, housing, vaccination/deworming history and treatments already used."
+    }
+}
 
 def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db: Session = Depends(get_db)):
     if not credentials: raise HTTPException(401, "Authentication required")
@@ -23,7 +41,7 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db
     return user
 
 @app.get("/health")
-def health(): return {"status":"ok","service":"kaifarms-ai-api","version":"0.3.0"}
+def health(): return {"status":"ok","service":"kaifarms-ai-api","version":"0.4.0"}
 
 @app.post("/api/auth/register")
 def register(data:RegisterRequest,db:Session=Depends(get_db)):
@@ -75,24 +93,49 @@ def farm_context(user:User,db:Session,farm_id:int|None):
         details.append("Recent farm records: "+" | ".join(f"{r.activity}: {r.crop_or_livestock} - {r.notes}" for r in records))
     return "\n".join(details)
 
+def route_mode(requested:str,farm_type:str|None,question:str):
+    if requested in ASSISTANT_MODES: return requested
+    q=question.lower()
+    if any(x in q for x in ["chicken","poultry","broiler","layer","chick","egg","flock"]): return "poultry"
+    if any(x in q for x in ["cattle","cow","goat","sheep","ram","livestock","calf","herd"]): return "livestock"
+    if farm_type in ASSISTANT_MODES: return farm_type
+    return "crop"
+
 @app.post("/api/ai/chat")
 def ai_chat(request:AIRequest,user:User=Depends(current_user),db:Session=Depends(get_db)):
     context=farm_context(user,db,request.farm_id)
+    farm_type=None
+    if request.farm_id:
+        farm=db.query(Farm).filter(Farm.id==request.farm_id,Farm.user_id==user.id).first()
+        farm_type=farm.farm_type if farm else None
+    mode=route_mode(request.assistant_mode,farm_type,request.question)
+    profile=ASSISTANT_MODES[mode]
     if request.context: context += ("\nFarmer context: "+request.context) if context else request.context
     key=os.getenv("OPENAI_API_KEY")
     if not key:
-        answer="I can help assess the farming question. Please provide the crop or animal, age/growth stage, location, visible symptoms, when the problem started, and any treatment already used."
-        mode="safe-demo"
+        answer=f"{profile['label']} selected. I can help with {profile['focus']}. {profile['intake']}"
+        mode_status="safe-demo"
     else:
         from openai import OpenAI
         client=OpenAI(api_key=key)
-        system="You are KAIFARMS AI, an agricultural assistant for African farmers. Use the farmer's farm context when provided. Give practical, cautious guidance. Do not claim certainty when evidence is insufficient. Do not prescribe restricted medicines. For serious animal illness or uncertain diagnosis, recommend a qualified veterinarian or agricultural expert."
-        prompt=request.question + ("\nContext:\n"+context if context else "")
+        system=f"""You are KAIFARMS AI — {profile['label']} for African farmers.
+Primary focus: {profile['focus']}.
+Use the farmer's farm context below whenever provided. The farmer may be in Nigeria, including North-Central conditions, so use practical locally relevant reasoning without inventing local facts.
+Intake guidance: {profile['intake']}
+Explain what is known, what is uncertain, and the next practical steps. Prefer integrated crop/poultry/livestock management and prevention.
+For animal cases, do not claim a definitive diagnosis from text alone, do not prescribe restricted medicines, and do not give unsafe dosing. For severe illness, rapid deaths, neurological signs, poisoning, severe dehydration, or other urgent cases, recommend prompt assessment by a qualified veterinarian.
+For crop cases, distinguish likely causes from confirmed diagnosis and recommend field checks before costly treatment.
+Never fabricate a farm record, weather observation, laboratory result, diagnosis, or treatment history."""
+        prompt=request.question + ("\nFarm context:\n"+context if context else "")
         response=client.responses.create(model=os.getenv("OPENAI_MODEL","gpt-5.6-luna"),input=[{"role":"system","content":system},{"role":"user","content":prompt}])
-        answer=response.output_text; mode="ai"
+        answer=response.output_text
+        mode_status="ai"
     consultation=Consultation(user_id=user.id,farm_id=request.farm_id,question=request.question,answer=answer,mode=mode)
     db.add(consultation); db.commit(); db.refresh(consultation)
-    return {"id":consultation.id,"answer":answer,"mode":mode,"farm_id":request.farm_id}
+    return {"id":consultation.id,"answer":answer,"mode":mode,"status":mode_status,"farm_id":request.farm_id}
+
+@app.get("/api/ai/modes")
+def ai_modes(): return [{"id":k,"label":v["label"],"focus":v["focus"]} for k,v in ASSISTANT_MODES.items()]
 
 @app.get("/api/ai/history")
 def ai_history(user:User=Depends(current_user),db:Session=Depends(get_db)):
