@@ -25,3 +25,4 @@ class RecordCreate(BaseModel):
 class AIRequest(BaseModel):
     question:str=Field(min_length=3)
     context:str|None=None
+    farm_id:int|None=None
