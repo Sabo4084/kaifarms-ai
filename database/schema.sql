@@ -1,0 +1,2 @@
+-- KAIFARMS AI relational schema reference. SQLAlchemy creates these tables automatically for the MVP.
+-- Core entities: users, farms, farm_records.
