@@ -12,6 +12,7 @@ class User(Base):
     password_hash: Mapped[str]=mapped_column(String(255))
     created_at: Mapped[datetime]=mapped_column(DateTime,default=lambda:datetime.now(timezone.utc))
     farms: Mapped[list["Farm"]]=relationship(back_populates="owner",cascade="all, delete-orphan")
+    consultations: Mapped[list["Consultation"]]=relationship(back_populates="user",cascade="all, delete-orphan")
 
 class Farm(Base):
     __tablename__="farms"
@@ -33,3 +34,14 @@ class FarmRecord(Base):
     crop_or_livestock: Mapped[str]=mapped_column(String(100))
     notes: Mapped[str]=mapped_column(Text,default="")
     farm: Mapped[Farm]=relationship(back_populates="records")
+
+class Consultation(Base):
+    __tablename__="consultations"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    user_id: Mapped[int]=mapped_column(ForeignKey("users.id"))
+    farm_id: Mapped[int|None]=mapped_column(ForeignKey("farms.id"),nullable=True)
+    question: Mapped[str]=mapped_column(Text)
+    answer: Mapped[str]=mapped_column(Text)
+    mode: Mapped[str]=mapped_column(String(30))
+    created_at: Mapped[datetime]=mapped_column(DateTime,default=lambda:datetime.now(timezone.utc))
+    user: Mapped[User]=relationship(back_populates="consultations")
