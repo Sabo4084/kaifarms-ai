@@ -26,3 +26,4 @@ class AIRequest(BaseModel):
     question:str=Field(min_length=3)
     context:str|None=None
     farm_id:int|None=None
+    assistant_mode:str="auto"
