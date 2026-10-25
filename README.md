@@ -64,7 +64,7 @@ KAIFARMS AI is an assistant, not a replacement for qualified veterinary or agric
 3. Farmer profiles and farm management
 4. Local agricultural knowledge base / RAG
 5. Image-assisted crop and livestock diagnosis
-6. Expert referral workflow
+6. Expert referral dispatch, expert directory and case-status management
 7. Weather and farm alerts
 8. Android application
 9. Marketplace and B2B tools
