@@ -18,9 +18,9 @@ services:
   api:
     build: ./apps/api
     environment:
-      DATABASE_URL: postgresql://kaifarms:kaifarms@db:5432/kaifarms
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kaifarms}:${POSTGRES_PASSWORD:-kaifarms}@db:5432/${POSTGRES_DB:-kaifarms}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
       JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
