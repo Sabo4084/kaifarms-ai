@@ -5,6 +5,8 @@ from pwdlib import PasswordHash
 
 password_hash=PasswordHash.recommended()
 SECRET=os.getenv("JWT_SECRET","change-this-secret-in-production")
+if os.getenv("ENVIRONMENT", "development").lower() == "production" and (SECRET == "change-this-secret-in-production" or len(SECRET) < 32):
+    raise RuntimeError("Production requires a unique JWT_SECRET of at least 32 characters.")
 ALGORITHM="HS256"
 
 def hash_password(password:str)->str: return password_hash.hash(password)
