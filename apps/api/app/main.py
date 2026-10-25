@@ -9,7 +9,7 @@ from .schemas import RegisterRequest, LoginRequest, FarmCreate, RecordCreate, AI
 from .security import hash_password, verify_password, create_token, decode_token
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="KAIFARMS AI API", version="0.5.0")
+app = FastAPI(title="KAIFARMS AI API", version="0.6.0")
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 bearer = HTTPBearer(auto_error=False)
@@ -41,7 +41,7 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db
     return user
 
 @app.get("/health")
-def health(): return {"status":"ok","service":"kaifarms-ai-api","version":"0.5.0"}
+def health(): return {"status":"ok","service":"kaifarms-ai-api","version":"0.6.0"}
 
 @app.post("/api/auth/register")
 def register(data:RegisterRequest,db:Session=Depends(get_db)):
@@ -103,6 +103,8 @@ def route_mode(requested:str,farm_type:str|None,question:str):
 
 @app.post("/api/ai/chat")
 def ai_chat(request:AIRequest,user:User=Depends(current_user),db:Session=Depends(get_db)):
+    if request.assistant_mode not in {"auto", *ASSISTANT_MODES.keys()}:
+        raise HTTPException(422, "assistant_mode must be auto, crop, poultry, or livestock")
     context=farm_context(user,db,request.farm_id)
     farm_type=None
     if request.farm_id:
@@ -127,8 +129,16 @@ For animal cases, do not claim a definitive diagnosis from text alone, do not pr
 For crop cases, distinguish likely causes from confirmed diagnosis and recommend field checks before costly treatment.
 Never fabricate a farm record, weather observation, laboratory result, diagnosis, or treatment history."""
         prompt=request.question + ("\nFarm context:\n"+context if context else "")
-        response=client.responses.create(model=os.getenv("OPENAI_MODEL","gpt-5.6-luna"),input=[{"role":"system","content":system},{"role":"user","content":prompt}])
-        answer=response.output_text
+        try:
+            response=client.responses.create(model=os.getenv("OPENAI_MODEL","gpt-6-luna"),input=[{"role":"system","content":system},{"role":"user","content":prompt}])
+            answer=response.output_text
+            if not answer or not answer.strip():
+                raise HTTPException(502, "The AI service returned an empty answer. Please try again.")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Avoid leaking provider credentials, request payloads or internal error details.
+            raise HTTPException(502, "AI service is temporarily unavailable. Please try again shortly.") from exc
         mode_status="ai"
     consultation=Consultation(user_id=user.id,farm_id=request.farm_id,question=request.question,answer=answer,mode=mode)
     db.add(consultation); db.commit(); db.refresh(consultation)
