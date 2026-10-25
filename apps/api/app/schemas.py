@@ -27,3 +27,13 @@ class AIRequest(BaseModel):
     context:str|None=None
     farm_id:int|None=None
     assistant_mode:str="auto"
+
+
+class ReferralCreate(BaseModel):
+    farm_id:int|None=None
+    consultation_id:int|None=None
+    category:str=Field(min_length=3,max_length=30)
+    issue_summary:str=Field(min_length=10,max_length=4000)
+    urgency:str="routine"
+    contact_method:str="in_app"
+    contact_details:str|None=Field(default=None,max_length=255)
