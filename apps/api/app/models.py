@@ -45,3 +45,18 @@ class Consultation(Base):
     mode: Mapped[str]=mapped_column(String(30))
     created_at: Mapped[datetime]=mapped_column(DateTime,default=lambda:datetime.now(timezone.utc))
     user: Mapped[User]=relationship(back_populates="consultations")
+
+
+class ExpertReferral(Base):
+    __tablename__="expert_referrals"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    user_id: Mapped[int]=mapped_column(ForeignKey("users.id"),index=True)
+    farm_id: Mapped[int|None]=mapped_column(ForeignKey("farms.id"),nullable=True)
+    consultation_id: Mapped[int|None]=mapped_column(ForeignKey("consultations.id"),nullable=True)
+    category: Mapped[str]=mapped_column(String(30))
+    issue_summary: Mapped[str]=mapped_column(Text)
+    urgency: Mapped[str]=mapped_column(String(20),default="routine")
+    contact_method: Mapped[str]=mapped_column(String(30),default="in_app")
+    contact_details: Mapped[str|None]=mapped_column(String(255),nullable=True)
+    status: Mapped[str]=mapped_column(String(30),default="submitted")
+    created_at: Mapped[datetime]=mapped_column(DateTime,default=lambda:datetime.now(timezone.utc))
