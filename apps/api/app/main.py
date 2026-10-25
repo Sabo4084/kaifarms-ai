@@ -4,12 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 from .db import Base, engine, get_db
-from .models import Farm, FarmRecord, User, Consultation
-from .schemas import RegisterRequest, LoginRequest, FarmCreate, RecordCreate, AIRequest
+from .models import Farm, FarmRecord, User, Consultation, ExpertReferral
+from .schemas import RegisterRequest, LoginRequest, FarmCreate, RecordCreate, AIRequest, ReferralCreate
 from .security import hash_password, verify_password, create_token, decode_token
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="KAIFARMS AI API", version="0.4.0")
+app = FastAPI(title="KAIFARMS AI API", version="0.5.0")
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 bearer = HTTPBearer(auto_error=False)
@@ -41,7 +41,7 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db
     return user
 
 @app.get("/health")
-def health(): return {"status":"ok","service":"kaifarms-ai-api","version":"0.4.0"}
+def health(): return {"status":"ok","service":"kaifarms-ai-api","version":"0.5.0"}
 
 @app.post("/api/auth/register")
 def register(data:RegisterRequest,db:Session=Depends(get_db)):
@@ -141,3 +141,57 @@ def ai_modes(): return [{"id":k,"label":v["label"],"focus":v["focus"]} for k,v i
 def ai_history(user:User=Depends(current_user),db:Session=Depends(get_db)):
     rows=db.query(Consultation).filter(Consultation.user_id==user.id).order_by(Consultation.created_at.desc()).limit(50).all()
     return [{"id":r.id,"farm_id":r.farm_id,"question":r.question,"answer":r.answer,"mode":r.mode,"created_at":r.created_at.isoformat()} for r in rows]
+
+
+REFERRAL_CATEGORIES = {"crop", "poultry", "livestock", "soil", "business", "other"}
+REFERRAL_URGENCIES = {"routine", "soon", "urgent"}
+REFERRAL_CONTACT_METHODS = {"in_app", "phone", "email"}
+
+def referral_payload(item: ExpertReferral):
+    return {
+        "id": item.id, "farm_id": item.farm_id, "consultation_id": item.consultation_id,
+        "category": item.category, "issue_summary": item.issue_summary,
+        "urgency": item.urgency, "contact_method": item.contact_method,
+        "contact_details": item.contact_details, "status": item.status,
+        "created_at": item.created_at.isoformat()
+    }
+
+@app.post("/api/referrals", status_code=201)
+def create_referral(data: ReferralCreate, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if data.category not in REFERRAL_CATEGORIES:
+        raise HTTPException(422, "Choose a supported referral category")
+    if data.urgency not in REFERRAL_URGENCIES:
+        raise HTTPException(422, "Urgency must be routine, soon, or urgent")
+    if data.contact_method not in REFERRAL_CONTACT_METHODS:
+        raise HTTPException(422, "Choose in_app, phone, or email as the contact method")
+    if data.farm_id is not None:
+        farm = db.query(Farm).filter(Farm.id == data.farm_id, Farm.user_id == user.id).first()
+        if not farm:
+            raise HTTPException(404, "Farm not found")
+    if data.consultation_id is not None:
+        consultation = db.query(Consultation).filter(
+            Consultation.id == data.consultation_id, Consultation.user_id == user.id
+        ).first()
+        if not consultation:
+            raise HTTPException(404, "Consultation not found")
+    item = ExpertReferral(user_id=user.id, **data.model_dump())
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return referral_payload(item)
+
+@app.get("/api/referrals")
+def list_referrals(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    rows = db.query(ExpertReferral).filter(ExpertReferral.user_id == user.id).order_by(
+        ExpertReferral.created_at.desc()
+    ).limit(100).all()
+    return [referral_payload(item) for item in rows]
+
+@app.get("/api/referrals/{referral_id}")
+def get_referral(referral_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    item = db.query(ExpertReferral).filter(
+        ExpertReferral.id == referral_id, ExpertReferral.user_id == user.id
+    ).first()
+    if not item:
+        raise HTTPException(404, "Referral not found")
+    return referral_payload(item)
