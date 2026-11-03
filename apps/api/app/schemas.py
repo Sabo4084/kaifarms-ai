@@ -27,6 +27,7 @@ class AIRequest(BaseModel):
     context:str|None=Field(default=None,max_length=8000)
     farm_id:int|None=Field(default=None,gt=0)
     assistant_mode:str=Field(default="auto",max_length=20)
+    language:str=Field(default="English",max_length=40)
 
 
 class ReferralCreate(BaseModel):

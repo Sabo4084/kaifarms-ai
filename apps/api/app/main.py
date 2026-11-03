@@ -1,5 +1,6 @@
 import os
-from fastapi import Depends, FastAPI, HTTPException
+import base64
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
@@ -113,6 +114,8 @@ def ai_chat(request:AIRequest,user:User=Depends(current_user),db:Session=Depends
     mode=route_mode(request.assistant_mode,farm_type,request.question)
     profile=ASSISTANT_MODES[mode]
     if request.context: context += ("\nFarmer context: "+request.context) if context else request.context
+    language = getattr(request, "language", "English")
+    language_instruction = f"Respond in {language}, using simple farmer-friendly language. If you cannot reliably use that language, say so and provide clear English rather than inventing translations." if language and language.lower() != "english" else "Respond in clear, simple English."
     key=os.getenv("OPENAI_API_KEY")
     if not key:
         answer=f"{profile['label']} selected. I can help with {profile['focus']}. {profile['intake']}"
@@ -127,7 +130,8 @@ Intake guidance: {profile['intake']}
 Explain what is known, what is uncertain, and the next practical steps. Prefer integrated crop/poultry/livestock management and prevention.
 For animal cases, do not claim a definitive diagnosis from text alone, do not prescribe restricted medicines, and do not give unsafe dosing. For severe illness, rapid deaths, neurological signs, poisoning, severe dehydration, or other urgent cases, recommend prompt assessment by a qualified veterinarian.
 For crop cases, distinguish likely causes from confirmed diagnosis and recommend field checks before costly treatment.
-Never fabricate a farm record, weather observation, laboratory result, diagnosis, or treatment history."""
+Never fabricate a farm record, weather observation, laboratory result, diagnosis, or treatment history.
+{language_instruction}"""
         prompt=request.question + ("\nFarm context:\n"+context if context else "")
         try:
             response=client.responses.create(model=os.getenv("OPENAI_MODEL","gpt-6-luna"),input=[{"role":"system","content":system},{"role":"user","content":prompt}])
@@ -143,6 +147,75 @@ Never fabricate a farm record, weather observation, laboratory result, diagnosis
     consultation=Consultation(user_id=user.id,farm_id=request.farm_id,question=request.question,answer=answer,mode=mode)
     db.add(consultation); db.commit(); db.refresh(consultation)
     return {"id":consultation.id,"answer":answer,"mode":mode,"status":mode_status,"farm_id":request.farm_id}
+
+
+@app.post("/api/ai/diagnose-image")
+async def diagnose_image(
+    image: UploadFile = File(...),
+    question: str = Form(default="Please assess this farm photo and suggest practical next steps."),
+    assistant_mode: str = Form(default="auto"),
+    language: str = Form(default="English"),
+    farm_id: int | None = Form(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    if assistant_mode not in {"auto", *ASSISTANT_MODES.keys()}:
+        raise HTTPException(422, "assistant_mode must be auto, crop, poultry, or livestock")
+    allowed_types = {"image/jpeg", "image/png", "image/webp"}
+    if image.content_type not in allowed_types:
+        raise HTTPException(415, "Upload a JPG, PNG, or WebP image.")
+    raw = await image.read()
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(413, "Image must be non-empty and no larger than 8 MB.")
+    context = farm_context(user, db, farm_id)
+    farm_type = None
+    if farm_id:
+        farm = db.query(Farm).filter(Farm.id == farm_id, Farm.user_id == user.id).first()
+        farm_type = farm.farm_type if farm else None
+    mode = route_mode(assistant_mode, farm_type, question)
+    if mode == "auto":
+        mode = "crop"
+    profile = ASSISTANT_MODES[mode]
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        raise HTTPException(503, "Photo diagnosis requires the AI service to be configured. Please try again later.")
+    mime = image.content_type
+    data_url = f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+    language_note = "Reply in clear, simple English."
+    if language and language.lower() != "english":
+        language_note = f"Reply in {language}, using simple farmer-friendly language. If you cannot reliably write this language, say so and provide a clear English answer rather than inventing translations."
+    system = f"""You are KAIFARMS AI, a cautious {profile['label']} for farmers in Nigeria.
+Assess only visible evidence in the uploaded image. State what can and cannot be identified from a photo; do not claim a confirmed diagnosis. Give likely possibilities, simple checks the farmer should make, immediate low-risk steps, and when to contact an extension worker or veterinarian. Never recommend unsafe chemical use or unverified animal drug doses. For severe animal illness or rapid deaths, advise urgent veterinary assessment. {language_note}
+Farm context, if supplied:
+{context}
+Question: {question}
+"""
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=key)
+        response = client.responses.create(
+            model=os.getenv("OPENAI_VISION_MODEL", "gpt-4.1-mini"),
+            input=[{"role":"user","content":[
+                {"type":"input_text","text":system},
+                {"type":"input_image","image_url":data_url}
+            ]}]
+        )
+        answer = response.output_text
+        if not answer or not answer.strip():
+            raise HTTPException(502, "The AI service returned an empty answer.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, "Photo analysis is temporarily unavailable. Please try again.") from exc
+    consultation = Consultation(
+        user_id=user.id, farm_id=farm_id,
+        question=f"[Photo analysis: {image.filename or 'farm image'}] {question}",
+        answer=answer, mode=mode
+    )
+    db.add(consultation)
+    db.commit()
+    db.refresh(consultation)
+    return {"id":consultation.id,"answer":answer,"mode":mode,"status":"ai","farm_id":farm_id,"image_stored":False}
 
 @app.get("/api/ai/modes")
 def ai_modes(): return [{"id":k,"label":v["label"],"focus":v["focus"]} for k,v in ASSISTANT_MODES.items()]
