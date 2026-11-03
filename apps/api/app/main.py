@@ -114,6 +114,8 @@ def ai_chat(request:AIRequest,user:User=Depends(current_user),db:Session=Depends
     mode=route_mode(request.assistant_mode,farm_type,request.question)
     profile=ASSISTANT_MODES[mode]
     if request.context: context += ("\nFarmer context: "+request.context) if context else request.context
+    language = getattr(request, "language", "English")
+    language_instruction = f"Respond in {language}, using simple farmer-friendly language. If you cannot reliably use that language, say so and provide clear English rather than inventing translations." if language and language.lower() != "english" else "Respond in clear, simple English."
     key=os.getenv("OPENAI_API_KEY")
     if not key:
         answer=f"{profile['label']} selected. I can help with {profile['focus']}. {profile['intake']}"
@@ -128,7 +130,8 @@ Intake guidance: {profile['intake']}
 Explain what is known, what is uncertain, and the next practical steps. Prefer integrated crop/poultry/livestock management and prevention.
 For animal cases, do not claim a definitive diagnosis from text alone, do not prescribe restricted medicines, and do not give unsafe dosing. For severe illness, rapid deaths, neurological signs, poisoning, severe dehydration, or other urgent cases, recommend prompt assessment by a qualified veterinarian.
 For crop cases, distinguish likely causes from confirmed diagnosis and recommend field checks before costly treatment.
-Never fabricate a farm record, weather observation, laboratory result, diagnosis, or treatment history."""
+Never fabricate a farm record, weather observation, laboratory result, diagnosis, or treatment history.
+{language_instruction}"""
         prompt=request.question + ("\nFarm context:\n"+context if context else "")
         try:
             response=client.responses.create(model=os.getenv("OPENAI_MODEL","gpt-6-luna"),input=[{"role":"system","content":system},{"role":"user","content":prompt}])
